@@ -1,0 +1,272 @@
+#!/bin/sh
+
+# PROVIDE: sidekiq
+# REQUIRE: LOGIN postgresql mysql
+# KEYWORD: shutdown
+
+. /etc/rc.subr
+
+name="sidekiq"
+rcvar="${name}_enable"
+procname="ruby"
+
+extra_commands="prestop show"
+start_cmd="sidekiq_start_command"
+show_cmd="sidekiq_show_command"
+prestop_cmd="sidekiq_prestop_command"
+
+load_rc_config "${name}"
+
+: ${sidekiq_enable:="NO"}
+: ${sidekiq_flags:=""}
+: ${sidekiq_env:="production"}
+: ${sidekiq_init_config:=""}
+: ${sidekiq_bundle_gemfile:=""}
+: ${sidekiq_profiles:=""}
+: ${sidekiq_rc_script:="/usr/local/etc/rc.d/sidekiq"}
+
+#
+# Convenience function to read a profile's environment variable, or fall back to a default
+#
+# e.x. _read_profile_var my_app pidfile '/u/my_app/shard/pids/sidekiq.pid'
+#
+_read_profile_var()
+{
+  profile=$1
+  var=$2
+  default=$3
+  default2=$4
+  eval value="\${sidekiq_${profile}_${var}:-${default}}"
+  eval value="\${value:-${default2}}"
+  echo "${value}"
+}
+
+#
+# Takes a directory and sets up some default environement variables based on a capistrano layout
+#
+_setup_directory()
+{
+  local directory
+  directory=$1
+
+  directory_command="${directory}/current/bin/sidekiq"
+  directory_pidfile="${directory}/shared/tmp/pids/sidekiq.pid"
+  directory_old_pidfile="${directory_pidfile}.oldbin"
+  directory_config="${directory}/current/config/sidekiq.yml"
+  directory_log="${directory}/current/log/sidekiq.log"
+  directory_init_config="${directory}/current/.env"
+  directory_bundle_gemfile="${directory}/current/Gemfile"
+  directory_chdir="${directory}/current"
+
+  # only use the directory_init_config if it exists
+  if [ ! -f "${directory_init_config}" ]; then
+    unset directory_init_config
+  fi
+
+  # only use the bundle_gemfile if it exists
+  if [ ! -f "${directory_bundle_gemfile}" ]; then
+    unset directory_bundle_gemfile
+  fi
+
+  if [ -f "${directory_config}" ]; then
+    directory_user=`stat -f "%Su" "${directory_config}"` # default to the owner of the config file
+  fi
+}
+
+#
+# If we have a profile, set up the environment for that profile
+#
+if [ -n "$2" ]; then
+  profile="$2"
+
+  # set the rcvar for this specific profile
+  rcvar="${name}_${profile}_enable"
+  rcvar="${rcvar}"
+
+  # if the user provides a directory, we can infer some default configuration
+  directory=`_read_profile_var "${profile}" "directory"`
+
+  if [ -n "${directory}" ]; then
+    _setup_directory "${directory}"
+  fi
+
+  sidekiq_config=`        _read_profile_var "${profile}" "config"         "${directory_config}"`
+  sidekiq_log=`           _read_profile_var "${profile}" "log"            "${directory_log}"`
+  sidekiq_init_config=`   _read_profile_var "${profile}" "init_config"    "${directory_init_config}"`
+  sidekiq_bundle_gemfile=`_read_profile_var "${profile}" "bundle_gemfile" "${directory_bundle_gemfile}"`
+  sidekiq_chdir=`         _read_profile_var "${profile}" "chdir"          "${directory_chdir}"`
+  sidekiq_user=`          _read_profile_var "${profile}" "user"           "${sidekiq_user}"           "${directory_user}"`
+  sidekiq_nice=`          _read_profile_var "${profile}" "nice"           "${sidekiq_nice}"`
+  sidekiq_env=`           _read_profile_var "${profile}" "env"            "${sidekiq_env}"`
+  sidekiq_flags=`         _read_profile_var "${profile}" "flags"          "${sidekiq_flags}"`
+
+  command=`_read_profile_var "${profile}"      "command"      "${sidekiq_command}"      "${directory_command}"`
+  command_args=`_read_profile_var "${profile}" "command_args" "${sidekiq_command_args}" "${directory_command_args}"`
+  pidfile=`_read_profile_var "${profile}"      "pidfile"      "${directory_pidfile}"`
+else
+  if [ "x${sidekiq_profiles}" != "x" -a "x$1" != "x" ]; then
+    # If we weren't started with a profile, run the command on all available profiles
+    for profile in ${sidekiq_profiles}; do
+      # By default set the profile rcvar to no to suppress warnings by checkyesno
+      profile_rcvar="${name}_${profile}_enable"
+      eval "${profile_rcvar}=\${${profile_rcvar}:-'NO'}"
+
+      if checkyesno ${profile_rcvar}; then
+        echo "Running ${1} on ${profile}"
+        ${sidekiq_rc_script} $1 $profile
+      else
+        echo "Skipping ${profile}"
+
+        # Unset the variable and then checkyesno again to print the warning
+        eval "unset ${profile_rcvar}"
+        checkyesno ${profile_rcvar}
+      fi
+      echo
+    done
+    exit 0
+  else
+    # look for a profile-less configuration
+
+    # if the user provides a directory, we can infer some default configuration
+    directory=${sidekiq_directory:-}
+
+    if [ -n "${directory}" ]; then
+      _setup_directory "${directory}"
+    fi
+
+    sidekiq_chdir=${sidekiq_chdir:-$directory_chdir}
+    sidekiq_user=${sidekiq_user:-$directory_user}
+    sidekiq_config=${sidekiq_config:-$directory_config}
+    sidekiq_log=${sidekiq_log:-$directory_log}
+    sidekiq_init_config=${sidekiq_init_config:-$directory_init_config}
+    sidekiq_bundle_gemfile=${sidekiq_bundle_gemfile:-$directory_bundle_gemfile}
+
+    command=${sidekiq_command:-$directory_command}
+    command_args=${sidekiq_command_args:-$directory_command_args}
+    pidfile=${sidekiq_pidfile:-$directory_pidfile}
+  fi
+fi
+
+# add the directory as a required directory, if it's specified
+required_dirs="${directory:-}"
+
+# if we have a config file file specified, make sure it exists
+required_files="${sidekiq_config:-}"
+
+#
+# Build up the flags based on the environment variables
+#
+[ -n "${sidekiq_config}" ] && sidekiq_flags="-C ${sidekiq_config} ${sidekiq_flags}"
+# [ -n "${sidekiq_log}" ] && sidekiq_flags="-L ${sidekiq_log} ${sidekiq_flags}"
+[ -n "${sidekiq_env}" ] && sidekiq_flags="-e ${sidekiq_env} ${sidekiq_flags}"
+
+# This function builds the command to start sidekiq. This is split out so we can
+# print it from the "show" command
+_sidekiq_start_command()
+{
+  local shell_command
+  local daemon_command
+
+  daemon_command="/usr/sbin/daemon -p ${pidfile} -o ${sidekiq_log} "
+
+  shell_command="${sidekiq_bundle_gemfile:+export BUNDLE_GEMFILE=$sidekiq_bundle_gemfile && }"\
+"${sidekiq_init_config:+. $sidekiq_init_config && }"\
+"${sidekiq_chdir:+cd $sidekiq_chdir && }"\
+"${sidekiq_nice:+nice -n $sidekiq_nice }"\
+"${daemon_command}"\
+"${command} ${rc_flags} ${command_args}"
+
+  # echo "su ${sidekiq_user} ${daemon_command} su -l ${sidekiq_user} -c \"${shell_command}\""
+  # if [ -n "${sidekiq_user}" ]; then
+  #   echo "su${daemon_command} su -l ${sidekiq_user} -c \"${shell_command}\""
+  # else
+  #   echo "${daemon_command} sh -c \"${shell_command}\""
+  # fi
+
+  if [ -n "${sidekiq_user}" ]; then
+    echo "su -l ${sidekiq_user} -c \"${shell_command}\""
+  else
+    echo "sh -c \"${shell_command}\""
+  fi
+}
+
+#
+# The start command
+#
+sidekiq_start_command()
+{
+  # ensure sidekiq isn't already running
+  if [ -z "$rc_fast" -a -n "$rc_pid" ]; then
+    echo 1>&2 "${name} already running? (pid=$rc_pid)."
+    return 1
+  fi
+
+  # ensure that the command exists and is executable
+  if [ ! -x "${_chroot}${_chroot:+/}${command}" ]; then
+    warn "run_rc_command: cannot run $command"
+    return 1
+  fi
+
+  check_startmsgs && echo "Starting ${name}: ${profile}."
+
+  eval "$(_sidekiq_start_command)"
+  _return=$?
+
+  if [ $_return -ne 0 ] && [ -z "${rc_force}" ]; then
+    return 1
+  fi
+
+  return 0
+}
+
+sidekiq_prestop_command()
+{
+  echo 1>&2 "Prestop/ Quiet command? ${rc_pid}."
+  if [ -n "${rc_pid}" ]; then
+    echo "SEND kill -TSTP ${rc_pid} to ${name}"
+    kill -TSTP "${rc_pid}"
+    return $?
+  else
+    echo 1>&2 "${name} isn't running?"
+    return 1
+  fi
+}
+
+
+#
+# Prints the configuration for the given profile
+#
+sidekiq_show_command()
+{
+  if [ -n "${profile}" ]; then
+    banner="Sidekiq Configuration for ${profile}"
+  else
+    banner="Sidekiq Configuration"
+  fi
+
+  echo "
+#
+# ${banner}
+#
+
+command:        ${command}
+command_args:   ${command_args}
+pidfile:        ${pidfile}
+config:         ${sidekiq_config}
+log:            ${sidekiq_log}
+init_config:    ${sidekiq_init_config}
+bundle_gemfile: ${sidekiq_bundle_gemfile}
+chdir:          ${sidekiq_chdir}
+user:           ${sidekiq_user}
+nice:           ${sidekiq_nice}
+env:            ${sidekiq_env}
+flags:          ${sidekiq_flags}
+
+start_command:
+
+$(_sidekiq_start_command)
+"
+}
+
+
+run_rc_command "${1}"
