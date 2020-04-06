@@ -167,7 +167,7 @@ _sidekiq_start_command()
   local shell_command
   local daemon_command
 
-  daemon_command="/usr/sbin/daemon -p ${pidfile} -o ${sidekiq_log} "
+  daemon_command="/usr/sbin/daemon -f -p ${pidfile} -o ${sidekiq_log} "
 
   shell_command="${sidekiq_bundle_gemfile:+export BUNDLE_GEMFILE=$sidekiq_bundle_gemfile && }"\
 "${sidekiq_init_config:+. $sidekiq_init_config && }"\
