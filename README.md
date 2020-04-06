@@ -1,6 +1,6 @@
 # freebsd-sidekiq
 
-An init script for running sidekiq on FreeBSD. Based entirely on the excellent [freebsd-puma] script by [Snake66]. 
+An init script for running sidekiq on FreeBSD. Based entirely on the excellent [freebsd-puma] script by [snake66]. 
 All I have done is to replace puma specifics with sidekiq specifics, and update this readme.
 
 This rc script works with either RVM and RBENV installed in your deploy user's directory, or with a globally installed ruby.
