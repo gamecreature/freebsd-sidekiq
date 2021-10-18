@@ -51,7 +51,6 @@ _setup_directory()
 
   directory_command="${directory}/current/bin/sidekiq"
   directory_pidfile="${directory}/shared/tmp/pids/sidekiq.pid"
-  directory_old_pidfile="${directory_pidfile}.oldbin"
   directory_config="${directory}/current/config/sidekiq.yml"
   directory_log="${directory}/current/log/sidekiq.log"
   directory_init_config="${directory}/current/.env"
@@ -167,7 +166,10 @@ _sidekiq_start_command()
   local shell_command
   local daemon_command
 
-  daemon_command="/usr/sbin/daemon -f -p ${pidfile} -o ${sidekiq_log} "
+  local pidfile_daemon
+  pidfile_daemon="${pidfile}-daemon.pid"
+
+  daemon_command="/usr/sbin/daemon -f -p ${pidfile} -P ${pidfile_daemon} -H -o ${sidekiq_log} "
 
   shell_command="${sidekiq_bundle_gemfile:+export BUNDLE_GEMFILE=$sidekiq_bundle_gemfile && }"\
 "${sidekiq_init_config:+. $sidekiq_init_config && }"\
@@ -175,13 +177,6 @@ _sidekiq_start_command()
 "${sidekiq_nice:+nice -n $sidekiq_nice }"\
 "${daemon_command}"\
 "${command} ${rc_flags} ${command_args}"
-
-  # echo "su ${sidekiq_user} ${daemon_command} su -l ${sidekiq_user} -c \"${shell_command}\""
-  # if [ -n "${sidekiq_user}" ]; then
-  #   echo "su${daemon_command} su -l ${sidekiq_user} -c \"${shell_command}\""
-  # else
-  #   echo "${daemon_command} sh -c \"${shell_command}\""
-  # fi
 
   if [ -n "${sidekiq_user}" ]; then
     echo "su -l ${sidekiq_user} -c \"${shell_command}\""
@@ -252,6 +247,7 @@ sidekiq_show_command()
 command:        ${command}
 command_args:   ${command_args}
 pidfile:        ${pidfile}
+pidfile_daemon: ${pidfile}-daemon.pid
 config:         ${sidekiq_config}
 log:            ${sidekiq_log}
 init_config:    ${sidekiq_init_config}
